@@ -145,138 +145,179 @@
             document.getElementById('failCount').textContent = failed;
         }
 
-        async function startProcess() {
-            const phoneNumber = document.getElementById('phoneNumber').value.trim();
-            
-            // Validate 10-digit number
-            if (!/^\d{10}$/.test(phoneNumber)) {
-                alert('Please enter a valid 10-digit number');
-                return;
-            }
+async function startProcess() {
+    const phoneNumber = document.getElementById('phoneNumber').value.trim();
+    
+    // Validate 10-digit number
+    if (!/^\d{10}$/.test(phoneNumber)) {
+        alert('Please enter a valid 10-digit number');
+        return;
+    }
 
-            // Reset counters
-            successful = 0;
-            failed = 0;
-            accountsProcessed = 0;
-            
-            // Show progress section
-            document.getElementById('progress').classList.remove('hidden');
-            document.getElementById('results').classList.add('hidden');
-            document.getElementById('logs').innerHTML = '';
-            
-            // Disable start button, show stop button
-            document.getElementById('startBtn').disabled = true;
-            document.getElementById('stopBtn').classList.remove('hidden');
-            
-            addLog(`🚀 Starting process for number: ${phoneNumber}`, 'info');
-            
-            try {
-                // Start the process
-                const response = await fetch('/start', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ phoneNumber: phoneNumber })
-                });
-
-                const data = await response.json();
-                
-                if (data.error) {
-                    addLog(`❌ Error: ${data.error}`, 'error');
-                    resetButtons();
-                    return;
-                }
-                
-                currentProcessId = data.processId;
-                addLog(`✅ Process started with ID: ${currentProcessId}`, 'success');
-                
-                // Connect to SSE stream
-                eventSource = new EventSource(`/stream/${currentProcessId}`);
-                
-                eventSource.onmessage = function(event) {
-                    try {
-                        const data = JSON.parse(event.data);
-                        
-                        switch(data.type) {
-                            case 'init':
-                                totalAccounts = data.total;
-                                addLog(data.message, 'info');
-                                updateProgress();
-                                break;
-                                
-                            case 'account_start':
-                                document.getElementById('currentAccount').classList.remove('hidden');
-                                document.getElementById('currentAccountName').textContent = data.username;
-                                document.getElementById('currentAccountProgress').textContent = 
-                                    `(${data.account}/${data.total})`;
-                                break;
-                                
-                            case 'log':
-                                addLog(data.message, 'info');
-                                break;
-                                
-                            case 'cycle_success':
-                                addLog(`  ✅ ${data.username} - Cycle ${data.cycle}/5 successful`, 'success');
-                                break;
-                                
-                            case 'cycle_fail':
-                                addLog(`  ❌ ${data.username} - Cycle ${data.cycle}/5 failed`, 'error');
-                                break;
-                                
-                            case 'account_complete':
-                                if (data.successful_cycles > 0) {
-                                    successful++;
-                                    addLog(`  ✅ Account ${data.username} completed: ${data.successful_cycles}/5 successful`, 'success');
-                                } else {
-                                    failed++;
-                                    addLog(`  ❌ Account ${data.username} failed: 0/5 successful`, 'error');
-                                }
-                                updateProgress();
-                                break;
-                                
-                            case 'error':
-                                addLog(`❌ Error: ${data.message}`, 'error');
-                                break;
-                                
-                            case 'complete':
-                                addLog('\n📊 PROCESS COMPLETE!', 'success');
-                                addLog(`✅ Successful accounts: ${data.data.successful}/${data.data.total}`, 'success');
-                                addLog(`❌ Failed accounts: ${data.data.failed}/${data.data.total}`, 'error');
-                                addLog(`🎯 Success rate: ${data.data.rate}%`, 'info');
-                                
-                                // Show results
-                                document.getElementById('resultData').textContent = JSON.stringify(data.data, null, 2);
-                                document.getElementById('results').classList.remove('hidden');
-                                
-                                // Cleanup
-                                if (eventSource) {
-                                    eventSource.close();
-                                }
-                                resetButtons();
-                                document.getElementById('currentAccount').classList.add('hidden');
-                                break;
-                        }
-                    } catch (e) {
-                        console.error('Error parsing SSE data:', e);
-                        addLog(`⚠️ Error parsing data: ${e.message}`, 'warning');
-                    }
-                };
-                
-                eventSource.onerror = function() {
-                    addLog('❌ Connection lost. Please check if server is running.', 'error');
-                    if (eventSource) {
-                        eventSource.close();
-                    }
-                    resetButtons();
-                };
-                
-            } catch (error) {
-                addLog(`❌ Error: ${error.message}`, 'error');
-                resetButtons();
-            }
+    // Reset counters
+    successful = 0;
+    failed = 0;
+    accountsProcessed = 0;
+    
+    // Show progress section
+    document.getElementById('progress').classList.remove('hidden');
+    document.getElementById('results').classList.add('hidden');
+    document.getElementById('logs').innerHTML = '';
+    
+    // Disable start button, show stop button
+    document.getElementById('startBtn').disabled = true;
+    document.getElementById('stopBtn').classList.remove('hidden');
+    
+    addLog(`🚀 Starting process for number: ${phoneNumber}`, 'info');
+    
+    try {
+        // Check if server is reachable first
+        const healthCheck = await fetch('/health');
+        if (!healthCheck.ok) {
+            throw new Error('Server not responding properly');
         }
+        
+        // Start the process
+        const response = await fetch('/start', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            },
+            body: JSON.stringify({ phoneNumber: phoneNumber })
+        });
 
+        // Check if response is JSON
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+            const text = await response.text();
+            console.error('Non-JSON response:', text.substring(0, 200));
+            throw new Error('Server returned HTML instead of JSON. Make sure Flask is running correctly.');
+        }
+        
+        const data = await response.json();
+        
+        if (!response.ok) {
+            throw new Error(data.error || `HTTP error! status: ${response.status}`);
+        }
+        
+        if (data.error) {
+            addLog(`❌ Error: ${data.error}`, 'error');
+            resetButtons();
+            return;
+        }
+        
+        currentProcessId = data.processId;
+        addLog(`✅ Process started with ID: ${currentProcessId}`, 'success');
+        
+        // Connect to SSE stream
+        if (eventSource) {
+            eventSource.close();
+        }
+        
+        eventSource = new EventSource(`/stream/${currentProcessId}`);
+        
+        eventSource.onopen = function() {
+            addLog('📡 Connected to stream', 'info');
+        };
+        
+        eventSource.onmessage = function(event) {
+            try {
+                const data = JSON.parse(event.data);
+                
+                switch(data.type) {
+                    case 'connected':
+                        addLog('📡 Stream connected', 'info');
+                        break;
+                        
+                    case 'init':
+                        totalAccounts = data.total;
+                        addLog(data.message, 'info');
+                        updateProgress();
+                        break;
+                        
+                    case 'account_start':
+                        document.getElementById('currentAccount').classList.remove('hidden');
+                        document.getElementById('currentAccountName').textContent = data.username;
+                        document.getElementById('currentAccountProgress').textContent = 
+                            `(${data.account}/${data.total})`;
+                        break;
+                        
+                    case 'log':
+                        addLog(data.message, 'info');
+                        break;
+                        
+                    case 'cycle_success':
+                        addLog(`  ✅ ${data.username} - Cycle ${data.cycle}/5 successful`, 'success');
+                        break;
+                        
+                    case 'cycle_fail':
+                        addLog(`  ❌ ${data.username} - Cycle ${data.cycle}/5 failed`, 'error');
+                        break;
+                        
+                    case 'account_complete':
+                        if (data.successful_cycles > 0) {
+                            successful++;
+                            addLog(`  ✅ Account ${data.username} completed: ${data.successful_cycles}/5 successful`, 'success');
+                        } else {
+                            failed++;
+                            addLog(`  ❌ Account ${data.username} failed: 0/5 successful`, 'error');
+                        }
+                        updateProgress();
+                        break;
+                        
+                    case 'error':
+                        addLog(`❌ Error: ${data.message}`, 'error');
+                        break;
+                        
+                    case 'complete':
+                        addLog('\n📊 PROCESS COMPLETE!', 'success');
+                        addLog(`✅ Successful accounts: ${data.data.successful}/${data.data.total}`, 'success');
+                        addLog(`❌ Failed accounts: ${data.data.failed}/${data.data.total}`, 'error');
+                        addLog(`🎯 Success rate: ${data.data.rate}%`, 'info');
+                        
+                        // Show results
+                        document.getElementById('resultData').textContent = JSON.stringify(data.data, null, 2);
+                        document.getElementById('results').classList.remove('hidden');
+                        
+                        // Cleanup
+                        if (eventSource) {
+                            eventSource.close();
+                        }
+                        resetButtons();
+                        document.getElementById('currentAccount').classList.add('hidden');
+                        break;
+                }
+            } catch (e) {
+                console.error('Error parsing SSE data:', e);
+                addLog(`⚠️ Error parsing data: ${e.message}`, 'warning');
+            }
+        };
+        
+        eventSource.onerror = function(event) {
+            console.error('EventSource error:', event);
+            
+            // Check if eventSource is still connected
+            if (eventSource.readyState === EventSource.CLOSED) {
+                addLog('❌ Connection closed. Please check if server is running.', 'error');
+            } else {
+                addLog('❌ Connection error. Retrying...', 'warning');
+            }
+            
+            // Don't close immediately, let it retry
+            setTimeout(() => {
+                if (eventSource.readyState === EventSource.CLOSED) {
+                    resetButtons();
+                }
+            }, 5000);
+        };
+        
+    } catch (error) {
+        addLog(`❌ Error: ${error.message}`, 'error');
+        console.error('Start process error:', error);
+        resetButtons();
+    }
+}
         function resetButtons() {
             document.getElementById('startBtn').disabled = false;
             document.getElementById('stopBtn').classList.add('hidden');
@@ -322,3 +363,4 @@
     </script>
 </body>
 </html>
+
