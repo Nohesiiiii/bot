@@ -5,6 +5,7 @@ import json
 import time
 from queue import Queue
 import logging
+import traceback
 
 app = Flask(__name__)
 
@@ -24,31 +25,44 @@ def index():
 
 @app.route('/start', methods=['POST'])
 def start_process():
-    data = request.json
-    phone_number = data.get('phoneNumber')
-    
-    if not phone_number or not phone_number.isdigit() or len(phone_number) != 10:
-        return jsonify({'error': 'Invalid phone number'}), 400
-    
-    # Create unique process ID
-    process_id = f"process_{int(time.time())}"
-    
-    # Create queue for this process
-    result_queue = Queue()
-    active_processes[process_id] = {
-        'queue': result_queue,
-        'status': 'running'
-    }
-    
-    # Start background thread
-    thread = threading.Thread(
-        target=run_async_process,
-        args=(process_id, phone_number, result_queue)
-    )
-    thread.daemon = True
-    thread.start()
-    
-    return jsonify({'processId': process_id})
+    try:
+        data = request.json
+        if not data:
+            return jsonify({'error': 'No data received'}), 400
+            
+        phone_number = data.get('phoneNumber')
+        
+        if not phone_number or not phone_number.isdigit() or len(phone_number) != 10:
+            return jsonify({'error': 'Invalid phone number. Must be 10 digits.'}), 400
+        
+        # Create unique process ID
+        process_id = f"process_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+        
+        # Create queue for this process
+        result_queue = Queue()
+        active_processes[process_id] = {
+            'queue': result_queue,
+            'status': 'running',
+            'start_time': time.time()
+        }
+        
+        # Start background thread
+        thread = threading.Thread(
+            target=run_async_process,
+            args=(process_id, phone_number, result_queue)
+        )
+        thread.daemon = True
+        thread.start()
+        
+        return jsonify({
+            'success': True,
+            'processId': process_id,
+            'message': 'Process started successfully'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error starting process: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 def run_async_process(process_id, phone_number, queue):
     """Run the async process in a separate thread"""
@@ -70,12 +84,14 @@ def run_async_process(process_id, phone_number, queue):
         
     except Exception as e:
         logger.error(f"Error in process {process_id}: {str(e)}")
+        logger.error(traceback.format_exc())
         queue.put({
             'type': 'error',
             'message': str(e)
         })
     finally:
-        active_processes[process_id]['status'] = 'completed'
+        if process_id in active_processes:
+            active_processes[process_id]['status'] = 'completed'
 
 @app.route('/stream/<process_id>')
 def stream(process_id):
@@ -86,44 +102,80 @@ def stream(process_id):
     def generate():
         queue = active_processes[process_id]['queue']
         
-        while True:
-            try:
-                # Get update from queue (timeout to check if process still alive)
-                update = queue.get(timeout=1)
-                yield f"data: {json.dumps(update)}\n\n"
-                
-                if update.get('type') == 'complete' or update.get('type') == 'error':
-                    break
+        try:
+            while True:
+                try:
+                    # Get update from queue (timeout to check if process still alive)
+                    update = queue.get(timeout=30)
                     
-            except:
-                # Check if process is still alive
-                if active_processes[process_id]['status'] == 'completed':
-                    break
-                continue
+                    # Ensure update is JSON serializable
+                    if update:
+                        yield f"data: {json.dumps(update)}\n\n"
+                    
+                    if update.get('type') == 'complete' or update.get('type') == 'error':
+                        break
+                        
+                except Exception as e:
+                    # Check if process is still alive
+                    if active_processes[process_id]['status'] == 'completed':
+                        break
+                    continue
+        finally:
+            # Cleanup
+            if process_id in active_processes:
+                # Keep for a while then delete
+                pass
     
-    return Response(generate(), mimetype='text/event-stream')
+    return Response(
+        generate(), 
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'Access-Control-Allow-Origin': '*'
+        }
+    )
 
 @app.route('/stop/<process_id>', methods=['POST'])
 def stop_process(process_id):
     """Stop a running process"""
     if process_id in active_processes:
         active_processes[process_id]['status'] = 'stopping'
-        return jsonify({'success': True})
+        return jsonify({'success': True, 'message': 'Process stopping'})
     return jsonify({'error': 'Process not found'}), 404
 
-# Cleanup old processes (optional)
-@app.before_request
+@app.route('/status/<process_id>')
+def get_status(process_id):
+    """Get process status"""
+    if process_id in active_processes:
+        return jsonify({
+            'status': active_processes[process_id]['status'],
+            'running': active_processes[process_id]['status'] == 'running'
+        })
+    return jsonify({'error': 'Process not found'}), 404
+
+# Cleanup old processes (runs every hour)
 def cleanup_old_processes():
     """Remove processes older than 1 hour"""
-    current_time = time.time()
-    to_delete = []
-    
-    for pid, info in active_processes.items():
-        # You might want to store start time in the process info
-        pass
-    
-    for pid in to_delete:
-        del active_processes[pid]
+    while True:
+        time.sleep(3600)  # 1 hour
+        current_time = time.time()
+        to_delete = []
+        
+        for pid, info in active_processes.items():
+            if current_time - info.get('start_time', 0) > 3600:
+                to_delete.append(pid)
+        
+        for pid in to_delete:
+            del active_processes[pid]
+            logger.info(f"Cleaned up old process: {pid}")
+
+# Start cleanup thread
+cleanup_thread = threading.Thread(target=cleanup_old_processes, daemon=True)
+cleanup_thread.start()
+
+# Add uuid import
+import uuid
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=True, threaded=True)
