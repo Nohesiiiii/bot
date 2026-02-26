@@ -6,7 +6,7 @@
     <title>IP Changer Tool</title>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
-<body class="bg-gray-100 min-h-screen flex items-center justify-center">
+<body class="bg-gray-100 min-h-screen flex items-center justify-center p-4">
     <div class="bg-white p-8 rounded-lg shadow-md w-full max-w-2xl">
         <h1 class="text-2xl font-bold mb-6 text-center text-gray-800">IP Changer Tool</h1>
         
@@ -20,9 +20,10 @@
                 id="phoneNumber" 
                 maxlength="10"
                 class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
-                placeholder="Enter 10 digits"
+                placeholder="Enter 10 digits (e.g., 9123456789)"
                 oninput="this.value = this.value.replace(/[^0-9]/g, '')"
             >
+            <p class="text-xs text-gray-500 mt-1">Password is fixed: qwe123</p>
         </div>
 
         <!-- Start Button -->
@@ -44,7 +45,7 @@
         </button>
 
         <!-- Progress Section -->
-        <div id="progress" class="hidden">
+        <div id="progress" class="hidden mt-4">
             <!-- Stats -->
             <div class="grid grid-cols-3 gap-4 mb-4">
                 <div class="bg-blue-100 p-3 rounded text-center">
@@ -109,7 +110,12 @@
         function addLog(message, type = 'info') {
             const logsDiv = document.getElementById('logs');
             const logEntry = document.createElement('div');
-            const timestamp = new Date().toLocaleTimeString();
+            const timestamp = new Date().toLocaleTimeString('en-US', { 
+                hour: '2-digit', 
+                minute: '2-digit', 
+                second: '2-digit',
+                hour12: true 
+            });
             
             let color = 'text-green-400';
             if (type === 'error') color = 'text-red-400';
@@ -140,7 +146,7 @@
         }
 
         async function startProcess() {
-            const phoneNumber = document.getElementById('phoneNumber').value;
+            const phoneNumber = document.getElementById('phoneNumber').value.trim();
             
             // Validate 10-digit number
             if (!/^\d{10}$/.test(phoneNumber)) {
@@ -162,7 +168,7 @@
             document.getElementById('startBtn').disabled = true;
             document.getElementById('stopBtn').classList.remove('hidden');
             
-            addLog(`🚀 Starting process for number: ${phoneNumber}`);
+            addLog(`🚀 Starting process for number: ${phoneNumber}`, 'info');
             
             try {
                 // Start the process
@@ -175,108 +181,144 @@
                 });
 
                 const data = await response.json();
+                
+                if (data.error) {
+                    addLog(`❌ Error: ${data.error}`, 'error');
+                    resetButtons();
+                    return;
+                }
+                
                 currentProcessId = data.processId;
+                addLog(`✅ Process started with ID: ${currentProcessId}`, 'success');
                 
                 // Connect to SSE stream
                 eventSource = new EventSource(`/stream/${currentProcessId}`);
                 
                 eventSource.onmessage = function(event) {
-                    const data = JSON.parse(event.data);
-                    
-                    switch(data.type) {
-                        case 'init':
-                            totalAccounts = data.total;
-                            addLog(data.message);
-                            updateProgress();
-                            break;
-                            
-                        case 'account_start':
-                            document.getElementById('currentAccount').classList.remove('hidden');
-                            document.getElementById('currentAccountName').textContent = data.username;
-                            document.getElementById('currentAccountProgress').textContent = 
-                                `(${data.account}/${data.total})`;
-                            break;
-                            
-                        case 'log':
-                            addLog(data.message);
-                            break;
-                            
-                        case 'cycle_success':
-                            addLog(`  ✅ ${data.username} - Cycle ${data.cycle}/5 successful`, 'success');
-                            break;
-                            
-                        case 'cycle_fail':
-                            addLog(`  ❌ ${data.username} - Cycle ${data.cycle}/5 failed`, 'error');
-                            break;
-                            
-                        case 'account_complete':
-                            if (data.successful_cycles > 0) {
-                                successful++;
-                                addLog(`  ✅ Account ${data.username} completed: ${data.successful_cycles}/5 successful`, 'success');
-                            } else {
-                                failed++;
-                                addLog(`  ❌ Account ${data.username} failed: 0/5 successful`, 'error');
-                            }
-                            updateProgress();
-                            break;
-                            
-                        case 'error':
-                            addLog(`❌ Error: ${data.message}`, 'error');
-                            break;
-                            
-                        case 'complete':
-                            addLog('\n📊 PROCESS COMPLETE!');
-                            addLog(`✅ Successful accounts: ${data.data.successful}/${data.data.total}`);
-                            addLog(`❌ Failed accounts: ${data.data.failed}/${data.data.total}`);
-                            addLog(`🎯 Success rate: ${data.data.rate}`);
-                            
-                            // Show results
-                            document.getElementById('resultData').textContent = JSON.stringify(data.data, null, 2);
-                            document.getElementById('results').classList.remove('hidden');
-                            
-                            // Cleanup
-                            eventSource.close();
-                            document.getElementById('startBtn').disabled = false;
-                            document.getElementById('stopBtn').classList.add('hidden');
-                            document.getElementById('currentAccount').classList.add('hidden');
-                            break;
+                    try {
+                        const data = JSON.parse(event.data);
+                        
+                        switch(data.type) {
+                            case 'init':
+                                totalAccounts = data.total;
+                                addLog(data.message, 'info');
+                                updateProgress();
+                                break;
+                                
+                            case 'account_start':
+                                document.getElementById('currentAccount').classList.remove('hidden');
+                                document.getElementById('currentAccountName').textContent = data.username;
+                                document.getElementById('currentAccountProgress').textContent = 
+                                    `(${data.account}/${data.total})`;
+                                break;
+                                
+                            case 'log':
+                                addLog(data.message, 'info');
+                                break;
+                                
+                            case 'cycle_success':
+                                addLog(`  ✅ ${data.username} - Cycle ${data.cycle}/5 successful`, 'success');
+                                break;
+                                
+                            case 'cycle_fail':
+                                addLog(`  ❌ ${data.username} - Cycle ${data.cycle}/5 failed`, 'error');
+                                break;
+                                
+                            case 'account_complete':
+                                if (data.successful_cycles > 0) {
+                                    successful++;
+                                    addLog(`  ✅ Account ${data.username} completed: ${data.successful_cycles}/5 successful`, 'success');
+                                } else {
+                                    failed++;
+                                    addLog(`  ❌ Account ${data.username} failed: 0/5 successful`, 'error');
+                                }
+                                updateProgress();
+                                break;
+                                
+                            case 'error':
+                                addLog(`❌ Error: ${data.message}`, 'error');
+                                break;
+                                
+                            case 'complete':
+                                addLog('\n📊 PROCESS COMPLETE!', 'success');
+                                addLog(`✅ Successful accounts: ${data.data.successful}/${data.data.total}`, 'success');
+                                addLog(`❌ Failed accounts: ${data.data.failed}/${data.data.total}`, 'error');
+                                addLog(`🎯 Success rate: ${data.data.rate}%`, 'info');
+                                
+                                // Show results
+                                document.getElementById('resultData').textContent = JSON.stringify(data.data, null, 2);
+                                document.getElementById('results').classList.remove('hidden');
+                                
+                                // Cleanup
+                                if (eventSource) {
+                                    eventSource.close();
+                                }
+                                resetButtons();
+                                document.getElementById('currentAccount').classList.add('hidden');
+                                break;
+                        }
+                    } catch (e) {
+                        console.error('Error parsing SSE data:', e);
+                        addLog(`⚠️ Error parsing data: ${e.message}`, 'warning');
                     }
                 };
                 
                 eventSource.onerror = function() {
-                    addLog('❌ Connection lost', 'error');
-                    eventSource.close();
-                    document.getElementById('startBtn').disabled = false;
-                    document.getElementById('stopBtn').classList.add('hidden');
+                    addLog('❌ Connection lost. Please check if server is running.', 'error');
+                    if (eventSource) {
+                        eventSource.close();
+                    }
+                    resetButtons();
                 };
                 
             } catch (error) {
                 addLog(`❌ Error: ${error.message}`, 'error');
-                document.getElementById('startBtn').disabled = false;
-                document.getElementById('stopBtn').classList.add('hidden');
+                resetButtons();
             }
+        }
+
+        function resetButtons() {
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').classList.add('hidden');
         }
 
         async function stopProcess() {
             if (currentProcessId) {
                 try {
-                    await fetch(`/stop/${currentProcessId}`, {
+                    const response = await fetch(`/stop/${currentProcessId}`, {
                         method: 'POST'
                     });
-                    addLog('🛑 Process stopped by user', 'warning');
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        addLog('🛑 Process stopped by user', 'warning');
+                    }
                     
                     if (eventSource) {
                         eventSource.close();
                     }
                     
-                    document.getElementById('startBtn').disabled = false;
-                    document.getElementById('stopBtn').classList.add('hidden');
+                    resetButtons();
                     
                 } catch (error) {
                     addLog(`❌ Error stopping process: ${error.message}`, 'error');
                 }
             }
         }
+
+        // Check server status on load
+        window.onload = function() {
+            fetch('/')
+                .then(response => {
+                    if (response.ok) {
+                        console.log('Server is running');
+                    }
+                })
+                .catch(error => {
+                    console.error('Server not reachable:', error);
+                    alert('Cannot connect to server. Make sure Flask is running.');
+                });
+        };
     </script>
 </body>
 </html>
